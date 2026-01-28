@@ -1,0 +1,223 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Weather Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+-<script type="text/javascript" src="https://js-cdn.dynatracelabs.com/jstag/145e049b9b1/ruxitagent_ICA7NVfqrux_10331260127150809.js" data-dtconfig="app=EFE340B7D4CAEA69|cors=1|owasp=1|featureHash=ICA7NVfqrux|reportUrl=https://bf12352mhz.bf-sprint.dynatracelabs.com/bf|rdnt=1|uxrgce=1|cuc=7z6nrbgr|mel=100000|expw=1|dpvc=1|lastModification=1769631412796|tp=500,50,0|srbbv=2|agentUri=https://js-cdn.dynatracelabs.com/jstag/145e049b9b1/ruxitagent_ICA7NVfqrux_10331260127150809.js" crossorigin="anonymous"></script>  <style>
+    :root {
+      --bg: #f3f4f6;
+      --card: #fff;
+      --text: #111827;
+      --muted: #6b7280;
+      --accent: #2563eb;
+      --border: #e5e7eb;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial;
+      background: var(--bg);
+      padding: 2rem;
+      display: flex;
+      justify-content: center;
+      color: var(--text);
+    }
+    .container {
+      width: 100%;
+      max-width: 680px;
+    }
+    .controls {
+      display: flex;
+      gap: .5rem;
+      margin-bottom: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    select, button {
+      padding: .6rem .75rem;
+      border-radius: .5rem;
+      border: 1px solid var(--border);
+      background: #fff;
+      font-size: 1rem;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: .6;
+      cursor: default;
+    }
+    .card {
+      background: var(--card);
+      padding: 1.5rem;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      display: grid;
+      gap: .5rem;
+    }
+    .city {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin-bottom: .25rem;
+    }
+    .time {
+      color: var(--muted);
+      margin-bottom: .75rem;
+    }
+    .temperature {
+      font-size: 3rem;
+      font-weight: 700;
+      margin-bottom: .25rem;
+    }
+    .row { margin: .15rem 0; }
+    .error {
+      background: #fee2e2;
+      color: #7f1d1d;
+      border: 1px solid #fecaca;
+      padding: .75rem;
+      border-radius: .5rem;
+      margin-top: 1rem;
+      display: none;
+    }
+    .footer {
+      margin-top: .75rem;
+      color: var(--muted);
+      font-size: .875rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="controls">
+      <label for="citySelect">City:</label>
+      <select id="citySelect"></select>
+      <button id="refreshBtn">Get Weather</button>
+      <button id="randomBtn" title="Choose a random city">Random</button>
+    </div>
+
+    <div class="card" id="card">
+      <div class="city" id="city">Loading...</div>
+      <div class="time" id="time"></div>
+      <div class="temperature" id="temp"></div>
+      <div class="row" id="wind"></div>
+      <div class="row" id="coords"></div>
+      <div class="footer">Powered by Open‑Meteo</div>
+    </div>
+
+    <div class="error" id="errorBox"></div>
+  </div>
+
+  <script>
+    const citySelect = document.getElementById('citySelect');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const randomBtn = document.getElementById('randomBtn');
+
+    const cityEl = document.getElementById('city');
+    const timeEl = document.getElementById('time');
+    const tempEl = document.getElementById('temp');
+    const windEl = document.getElementById('wind');
+    const coordsEl = document.getElementById('coords');
+    const errorBox = document.getElementById('errorBox');
+
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.style.display = 'block';
+    }
+
+    function clearError() {
+      errorBox.style.display = 'none';
+      errorBox.textContent = '';
+    }
+
+    async function loadCities() {
+      try {
+        const res = await fetch('/weather/cities');
+        const cities = await res.json();
+        citySelect.innerHTML = '';
+        for (const c of cities) {
+          const opt = document.createElement('option');
+          opt.value = c.key;
+          opt.textContent = c.name;
+          citySelect.appendChild(opt);
+        }
+        // Preselect Denver if present (your home base)
+        const preferred = 'denver';
+        if ([...citySelect.options].some(o => o.value === preferred)) {
+          citySelect.value = preferred;
+        }
+      } catch (e) {
+        showError('Failed to load city list.');
+      }
+    }
+
+    async function fetchWeatherForSelected() {
+      clearError();
+      setLoading(true);
+      const key = citySelect.value;
+      try {
+        const res = await fetch(`/weather?city=${encodeURIComponent(key)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        renderWeather(data);
+      } catch (e) {
+        showError('Failed to fetch weather. ' + (e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function fetchRandomWeather() {
+      clearError();
+      setLoading(true);
+      try {
+        const res = await fetch('/weather'); // no params => random
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        renderWeather(data);
+        // try to sync dropdown to the returned city name if found
+        const found = [...citySelect.options].find(o => o.textContent === data.city);
+        if (found) citySelect.value = found.value;
+      } catch (e) {
+        showError('Failed to fetch random weather. ' + (e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function renderWeather(d) {
+      cityEl.textContent = d.city;
+      timeEl.textContent = 'Observed: ' + d.observed_at;
+      tempEl.textContent = d.temperature + '°F';
+      windEl.textContent = 'Wind: ' + d.windspeed + ' mph from ' + d.winddirection + '°';
+      coordsEl.textContent = `Coords: ${d.coordinates.lat}, ${d.coordinates.lon}`;
+    }
+
+    function setLoading(isLoading) {
+      refreshBtn.disabled = isLoading;
+      randomBtn.disabled = isLoading;
+      if (isLoading) {
+        cityEl.textContent = 'Loading...';
+        timeEl.textContent = '';
+        tempEl.textContent = '';
+        windEl.textContent = '';
+        coordsEl.textContent = '';
+      }
+    }
+
+    // Wire up events
+    refreshBtn.addEventListener('click', fetchWeatherForSelected);
+    randomBtn.addEventListener('click', fetchRandomWeather);
+    citySelect.addEventListener('change', fetchWeatherForSelected);
+
+    // Init
+    (async function init() {
+      await loadCities();
+      await fetchWeatherForSelected();
+    })();
+  </script>
+</body>
+</html>
+``
