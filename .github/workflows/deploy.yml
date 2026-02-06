@@ -1,3 +1,4 @@
+
 name: Deploy WeatherApp to EC2
 
 on:
@@ -32,3 +33,32 @@ jobs:
             npm install --production=false
             npx tsc
             pm2 restart weatherapp || pm2 start "npx tsx app.ts" --name weatherapp
+
+      - name: Send SDLC Deployment Event to Dynatrace
+        env:
+          DT_SDLCE_URL: ${{ secrets.DT_SDLCE_URL }}
+          DT_API_TOKEN: ${{ secrets.DT_API_TOKEN }}
+        run: |
+          SHA_SHORT="${GITHUB_SHA::7}"
+          BRANCH="${GITHUB_REF_NAME}"
+          ACTOR="${GITHUB_ACTOR}"
+          APP="weatherapp"
+          ENVIRONMENT="prod"
+
+          cat > payload.json <<EOF
+          {
+            "event.type": "deployment",
+            "event.status": "finished",
+            "app.name": "$APP",
+            "app.env": "$ENVIRONMENT",
+            "git.commit": "$SHA_SHORT",
+            "git.branch": "$BRANCH",
+            "ci.actor": "$ACTOR",
+            "ci.system": "github-actions"
+          }
+          EOF
+
+          curl -sS -X POST "$DT_SDLCE_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Api-Token $DT_API_TOKEN" \
+            --data @payload.json
