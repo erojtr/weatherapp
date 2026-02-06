@@ -20,9 +20,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build TypeScript
-        run: npx tsc
-
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v0.1.10
         with:
