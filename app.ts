@@ -4,6 +4,7 @@ import express, { Express } from 'express';
 
 const PORT: number = parseInt(process.env.PORT || '8080');
 const app: Express = express();
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Serve /public
 app.use(express.static('public'));
@@ -104,6 +105,6 @@ app.get('/weather', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Listening for requests on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Listening for requests on http://${HOST}:${PORT}`);
 });
