@@ -32,12 +32,7 @@ function findCityByKey(key?: string) {
 
 // Optional helper to call Open‑Meteo using native fetch (Node 18+)
 async function fetchWeather(lat: number, lon: number) {
-  // adding sleep to fail SRG?
-    (async function() {
-    console.log("Start waiting...");
-    await delay(5000); // Wait for 5000 milliseconds (5 seconds)
-    console.log("Waited for 5 seconds");
-})();
+
   const params = new URLSearchParams({
     latitude: String(lat),
     longitude: String(lon),
