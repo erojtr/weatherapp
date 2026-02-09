@@ -1,6 +1,7 @@
 
 // app.ts 
 import express, { Express } from 'express';
+import { setTimeout as delay } from 'timers/promises';
 
 const PORT: number = parseInt(process.env.PORT || '8080');
 const app: Express = express();
@@ -32,9 +33,11 @@ function findCityByKey(key?: string) {
 // Optional helper to call Open‑Meteo using native fetch (Node 18+)
 async function fetchWeather(lat: number, lon: number) {
   // adding sleep to fail SRG?
-      setTimeout(() => {
-      console.log("Waited for 5 seconds");
-        }, 5000);
+    (async function() {
+    console.log("Start waiting...");
+    await delay(5000); // Wait for 5000 milliseconds (5 seconds)
+    console.log("Waited for 5 seconds");
+})();
   const params = new URLSearchParams({
     latitude: String(lat),
     longitude: String(lon),
@@ -44,6 +47,7 @@ async function fetchWeather(lat: number, lon: number) {
     timezone: 'auto'
   });
 
+  
   // timeout via AbortController
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 8000);
