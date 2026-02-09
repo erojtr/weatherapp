@@ -155,6 +155,10 @@
 
     async function fetchWeatherForSelected() {
       clearError();
+      // adding sleep to fail SRG?
+      setTimeout(() => {
+    console.log("Waited for 5 seconds");
+}, 5000);
       setLoading(true);
       const key = citySelect.value;
       try {
@@ -206,6 +210,9 @@
         coordsEl.textContent = '';
       }
     }
+
+
+
 
     // Wire up events
     refreshBtn.addEventListener('click', fetchWeatherForSelected);
