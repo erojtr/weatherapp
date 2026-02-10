@@ -50,7 +50,8 @@ jobs:
             git pull --rebase || true
 
             # install & build (TypeScript)
-            npm ci --no-audit --no-fund --prefer-offline --production=false
+            npm ci --no-audit --no-fund --prefer-offline --production=false/
+            npm install --save-dev typescript tsx
             npx tsc
 
             # run prod on a different port than staging
