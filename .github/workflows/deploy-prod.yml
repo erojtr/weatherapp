@@ -33,9 +33,9 @@ jobs:
       - name: Deploy to EC2 (prod on port 8081)
         uses: appleboy/ssh-action@v0.1.10
         with:
-          host: ${{ secrets.PROD_EC2_HOST }}
+          host: ${{ secrets.EC2_HOST }}
           username: ec2-user
-          key: ${{ secrets.PROD_EC2_SSH_KEY }}
+          key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -euo pipefail
 
