@@ -1,0 +1,98 @@
+
+name: Promote WeatherApp to Prod (Dynatrace-triggered)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Commit short SHA to deploy (e.g., 1a2b3c4)"
+        required: true
+      src_branch:
+        description: "Branch or tag to deploy from"
+        required: false
+        default: "main"
+
+jobs:
+  deploy-prod:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (metadata only)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.src_branch }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # If you prefer to build artifacts in CI and rsync them, add a build + upload step here.
+      # Keeping parity with your current approach: build on the EC2 box.
+
+      - name: Deploy to EC2 (prod on port 8081)
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.PROD_EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.PROD_EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            # go to your app directory (adjust if your path differs)
+            cd weatherapp
+
+            # ensure correct code version is present
+            git fetch --all --prune
+            git checkout "${{ github.event.inputs.src_branch }}"
+            # Pin to the EXACT commit that passed SRG (short SHA works if present in reflog; if not, fetch full)
+            git reset --hard "${{ github.event.inputs.version }}" || true
+            git pull --rebase || true
+
+            # install & build (TypeScript)
+            npm ci --no-audit --no-fund --prefer-offline --production=false
+            npx tsc
+
+            # run prod on a different port than staging
+            export PORT=8081
+            export HOST=0.0.0.0
+
+            # (Optional) cap Node heap to keep memory predictable on small instances
+            START_CMD="PORT=$PORT HOST=$HOST npx tsx app.ts"
+
+            # Start or restart the PROD PM2 app (distinct name from staging)
+            # If you’d rather avoid delete/start, you can use startOrReload/startOrRestart
+            pm2 describe weatherapp >/dev/null 2>&1 && pm2 delete weatherapp || true
+            pm2 start "$START_CMD" --name weatherapp
+            pm2 save
+
+      - name: Send SDLC Deployment Event to Dynatrace (prod)
+        env:
+          DT_SDLCE_URL: ${{ secrets.DT_SDLCE_URL }}
+          DT_API_TOKEN: ${{ secrets.DT_API_TOKEN }}
+        run: |
+          # Use the same fields your staging event uses so Dynatrace can correlate
+          VERSION="${{ github.event.inputs.version }}"
+          BRANCH="${{ github.event.inputs.src_branch }}"
+          ACTOR="${{ github.actor }}"
+          APP="weatherapp"
+          ENVIRONMENT="prod"
+
+          cat > payload.json <<EOF
+          {
+            "event.type": "deployment",
+            "event.status": "finished",
+            "app.name": "$APP",
+            "app.env": "$ENVIRONMENT",
+            "git.commit": "$VERSION",
+            "git.branch": "$BRANCH",
+            "ci.actor": "$ACTOR",
+            "ci.system": "github-actions"
+          }
+          EOF
+
+          curl -sS -X POST "$DT_SDLCE_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Api-Token $DT_API_TOKEN" \
+            --data @payload.json
+``
