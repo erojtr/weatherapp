@@ -37,35 +37,11 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            set -euo pipefail
-
-            # go to your app directory (adjust if your path differs)
             cd weatherapp
-
-            # ensure correct code version is present
-            git fetch --all --prune
-            git checkout "${{ github.event.inputs.src_branch }}"
-            # Pin to the EXACT commit that passed SRG (short SHA works if present in reflog; if not, fetch full)
-            git reset --hard "${{ github.event.inputs.version }}" || true
-            git pull --rebase || true
-
-            # install & build (TypeScript)
-            npm ci --no-audit --no-fund --prefer-offline --production=false/
-            npm install --save-dev typescript tsx
+            git pull origin main
+            npm install --production=false
             npx tsc
-
-            # run prod on a different port than staging
-            export PORT=8081
-            export HOST=0.0.0.0
-
-            # (Optional) cap Node heap to keep memory predictable on small instances
-            START_CMD="PORT=$PORT HOST=$HOST npx tsx app.ts"
-
-            # Start or restart the PROD PM2 app (distinct name from staging)
-            # If you’d rather avoid delete/start, you can use startOrReload/startOrRestart
-            pm2 describe weatherapp >/dev/null 2>&1 && pm2 delete weatherapp || true
-            pm2 start "$START_CMD" --name weatherapp
-            pm2 save
+            pm2 restart weatherapp-prod || PORT=8081 HOST=0.0.0.0 pm2 start npx --name weatherapp-prod -- tsx app.ts
 
       - name: Send SDLC Deployment Event to Dynatrace (prod)
         env:
