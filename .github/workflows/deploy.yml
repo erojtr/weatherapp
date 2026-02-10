@@ -67,7 +67,8 @@ jobs:
       - name: Send deployment event to Dynatrace
         uses: dynatrace-oss/dynatrace-github-action@v9
         with:
-          url: ${{ secrets.DT_EVENTS_URL }}
+          #url: ${{ secrets.DT_EVENTS_URL }}
+          url: "https://act53954.sprint.dynatracelabs.com/"
           token: ${{ secrets.DT_API_TOKEN }}
           events: |
             - title: My Application Deployment
