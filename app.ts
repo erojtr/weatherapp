@@ -1,14 +1,36 @@
 
-// app.ts 
+// app.ts
+import './tracing';
 import express, { Express } from 'express';
-import { setTimeout as delay } from 'timers/promises';
+import path from 'path';
+import { trace, metrics, SpanStatusCode } from '@opentelemetry/api';
 
 const PORT: number = parseInt(process.env.PORT || '8080');
 const app: Express = express();
 const HOST = process.env.HOST || '0.0.0.0';
 
-// Serve /public
-app.use(express.static('public'));
+const tracer = trace.getTracer('weather-app');
+const meter = metrics.getMeter('weather-app');
+const fetchDuration = meter.createHistogram('weather.fetch.duration', {
+  description: 'Time to fetch weather from Open-Meteo',
+  unit: 'ms',
+});
+
+const DT_BIZ_URL = `${process.env.DT_ENV_URL || 'https://act53954.sprint.dynatracelabs.com'}/api/v2/bizevents/ingest`;
+const DT_BIZ_HEADERS = {
+  'Authorization': `Api-Token ${process.env.DT_API_TOKEN}`,
+  'Content-Type': 'application/json',
+};
+
+function sendBizEvents(events: object[]): void {
+  fetch(DT_BIZ_URL, {
+    method: 'POST',
+    headers: DT_BIZ_HEADERS,
+    body: JSON.stringify(events),
+  }).catch(() => {}); // fire-and-forget
+}
+
+app.use(express.static(path.join(__dirname, '../public')));
 
 // --- City catalog used both for random and user selection ---
 const CITIES = [
@@ -31,28 +53,46 @@ function findCityByKey(key?: string) {
 }
 
 // Optional helper to call Open‑Meteo using native fetch (Node 18+)
-async function fetchWeather(lat: number, lon: number) {
-
-  const params = new URLSearchParams({
-    latitude: String(lat),
-    longitude: String(lon),
-    current_weather: 'true',
-    temperature_unit: 'fahrenheit',
-    wind_speed_unit: 'mph',
-    timezone: 'auto'
+async function fetchWeather(lat: number, lon: number, cityName?: string) {
+  const span = tracer.startSpan('weather.fetch', {
+    attributes: {
+      'weather.city': cityName ?? 'custom',
+      'weather.lat': lat,
+      'weather.lon': lon,
+      'weather.provider': 'open-meteo',
+    },
   });
 
-  
-  // timeout via AbortController
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), 8000);
+  const start = Date.now();
+  try {
+    const params = new URLSearchParams({
+      latitude: String(lat),
+      longitude: String(lon),
+      current_weather: 'true',
+      temperature_unit: 'fahrenheit',
+      wind_speed_unit: 'mph',
+      timezone: 'auto',
+    });
 
-  const resp = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, { signal: controller.signal })
-    .finally(() => clearTimeout(t));
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 8000);
 
-  if (!resp.ok) throw new Error(`Open-Meteo responded ${resp.status}`);
-  const data = await resp.json();
-  return data;
+    const resp = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, { signal: controller.signal })
+      .finally(() => clearTimeout(t));
+
+    if (!resp.ok) throw new Error(`Open-Meteo responded ${resp.status}`);
+    const data = await resp.json() as any;
+
+    fetchDuration.record(Date.now() - start, { city: cityName ?? 'custom' });
+    span.setStatus({ code: SpanStatusCode.OK });
+    return data;
+  } catch (err: any) {
+    span.setStatus({ code: SpanStatusCode.ERROR, message: err?.message });
+    span.recordException(err);
+    throw err;
+  } finally {
+    span.end();
+  }
 }
 
 // --- API: optional list of cities for dropdown population ---
@@ -65,10 +105,10 @@ app.get('/weather/cities', (_req, res) => {
 // 2) ?lat=..&lon=.. (ad-hoc coordinates)
 // 3) no params => random city (existing behavior)
 app.get('/weather', async (req, res) => {
+  const reqStart = Date.now();
   try {
-    let selected:
-      | { name: string; lat: number; lon: number }
-      | undefined;
+    let selected: { key?: string; name: string; lat: number; lon: number } | undefined;
+    let requestSource: string;
 
     if (req.query.city) {
       const city = findCityByKey(String(req.query.city));
@@ -76,6 +116,7 @@ app.get('/weather', async (req, res) => {
         return res.status(400).json({ error: 'Unknown city key', allowed: CITIES.map(c => c.key) });
       }
       selected = city;
+      requestSource = 'user_selected';
     } else if (req.query.lat && req.query.lon) {
       const lat = Number(req.query.lat);
       const lon = Number(req.query.lon);
@@ -83,13 +124,41 @@ app.get('/weather', async (req, res) => {
         return res.status(400).json({ error: 'Invalid lat/lon' });
       }
       selected = { name: `Custom (${lat}, ${lon})`, lat, lon };
+      requestSource = 'coordinates';
     } else {
       selected = getRandomCity();
+      requestSource = 'random';
     }
 
-    const data = await fetchWeather(selected.lat, selected.lon);
+    const data = await fetchWeather(selected.lat, selected.lon, selected.name);
     const cw = data?.current_weather;
     if (!cw) return res.status(502).json({ error: 'No current_weather in response', city: selected });
+
+    const responseMs = Date.now() - reqStart;
+    const events: object[] = [{
+      'event.type': 'weather.request',
+      'event.provider': 'dynatrace-weather-app',
+      'city.name': selected.name,
+      'city.key': selected.key ?? 'custom',
+      'temperature': cw.temperature,
+      'weather.code': cw.weathercode,
+      'windspeed': cw.windspeed,
+      'request.source': requestSource,
+      'response.time.ms': responseMs,
+    }];
+
+    if (cw.temperature < 0 || cw.temperature > 100) {
+      events.push({
+        'event.type': 'weather.alert',
+        'event.provider': 'dynatrace-weather-app',
+        'city.name': selected.name,
+        'city.key': selected.key ?? 'custom',
+        'temperature': cw.temperature,
+        'alert.reason': cw.temperature < 0 ? 'extreme_cold' : 'extreme_heat',
+      });
+    }
+
+    sendBizEvents(events);
 
     res.json({
       city: selected.name,
