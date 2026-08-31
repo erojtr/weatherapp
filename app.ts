@@ -16,6 +16,20 @@ const fetchDuration = meter.createHistogram('weather.fetch.duration', {
   unit: 'ms',
 });
 
+const DT_BIZ_URL = `${process.env.DT_ENV_URL || 'https://act53954.sprint.dynatracelabs.com'}/api/v2/bizevents/ingest`;
+const DT_BIZ_HEADERS = {
+  'Authorization': `Api-Token ${process.env.DT_API_TOKEN}`,
+  'Content-Type': 'application/json',
+};
+
+function sendBizEvents(events: object[]): void {
+  fetch(DT_BIZ_URL, {
+    method: 'POST',
+    headers: DT_BIZ_HEADERS,
+    body: JSON.stringify(events),
+  }).catch(() => {}); // fire-and-forget
+}
+
 app.use(express.static(path.join(__dirname, '../public')));
 
 // --- City catalog used both for random and user selection ---
@@ -91,10 +105,10 @@ app.get('/weather/cities', (_req, res) => {
 // 2) ?lat=..&lon=.. (ad-hoc coordinates)
 // 3) no params => random city (existing behavior)
 app.get('/weather', async (req, res) => {
+  const reqStart = Date.now();
   try {
-    let selected:
-      | { name: string; lat: number; lon: number }
-      | undefined;
+    let selected: { key?: string; name: string; lat: number; lon: number } | undefined;
+    let requestSource: string;
 
     if (req.query.city) {
       const city = findCityByKey(String(req.query.city));
@@ -102,6 +116,7 @@ app.get('/weather', async (req, res) => {
         return res.status(400).json({ error: 'Unknown city key', allowed: CITIES.map(c => c.key) });
       }
       selected = city;
+      requestSource = 'user_selected';
     } else if (req.query.lat && req.query.lon) {
       const lat = Number(req.query.lat);
       const lon = Number(req.query.lon);
@@ -109,13 +124,41 @@ app.get('/weather', async (req, res) => {
         return res.status(400).json({ error: 'Invalid lat/lon' });
       }
       selected = { name: `Custom (${lat}, ${lon})`, lat, lon };
+      requestSource = 'coordinates';
     } else {
       selected = getRandomCity();
+      requestSource = 'random';
     }
 
     const data = await fetchWeather(selected.lat, selected.lon, selected.name);
     const cw = data?.current_weather;
     if (!cw) return res.status(502).json({ error: 'No current_weather in response', city: selected });
+
+    const responseMs = Date.now() - reqStart;
+    const events: object[] = [{
+      'event.type': 'weather.request',
+      'event.provider': 'dynatrace-weather-app',
+      'city.name': selected.name,
+      'city.key': selected.key ?? 'custom',
+      'temperature': cw.temperature,
+      'weather.code': cw.weathercode,
+      'windspeed': cw.windspeed,
+      'request.source': requestSource,
+      'response.time.ms': responseMs,
+    }];
+
+    if (cw.temperature < 0 || cw.temperature > 100) {
+      events.push({
+        'event.type': 'weather.alert',
+        'event.provider': 'dynatrace-weather-app',
+        'city.name': selected.name,
+        'city.key': selected.key ?? 'custom',
+        'temperature': cw.temperature,
+        'alert.reason': cw.temperature < 0 ? 'extreme_cold' : 'extreme_heat',
+      });
+    }
+
+    sendBizEvents(events);
 
     res.json({
       city: selected.name,
